@@ -12,6 +12,8 @@ func New() *schema.Provider {
 			"http": dataSource(),
 		},
 
-		ResourcesMap: map[string]*schema.Resource{},
+		ResourcesMap: map[string]*schema.Resource{
+			"http_resource": resourceHTTP(),
+		},
 	}
 }
