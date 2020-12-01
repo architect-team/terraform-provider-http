@@ -1,16 +1,16 @@
 package provider
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 // resourceHTTP returns the current version of the
-// http resource and needs to be updated when the schema
+// http_resource and needs to be updated when the schema
 // version is incremented.
 func resourceHTTP() *schema.Resource { return resourceHTTPV1() }
 
@@ -24,24 +24,27 @@ func resourceHTTPV1() *schema.Resource {
 		SchemaVersion: 1,
 		Schema: map[string]*schema.Schema{
 			"url": {
-				Type:     schema.TypeString,
-				Required: true,
+				Type:      schema.TypeString,
+				Required:  true,
+				Sensitive: true,
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
 				},
 			},
 
 			"request_headers": {
-				Type:     schema.TypeMap,
-				Optional: true,
+				Type:      schema.TypeMap,
+				Optional:  true,
+				Sensitive: true,
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
 				},
 			},
 
 			"body": {
-				Type:     schema.TypeString,
-				Optional: true,
+				Type:      schema.TypeString,
+				Optional:  true,
+				Sensitive: true,
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
 				},
@@ -54,15 +57,15 @@ func buildHTTPClient(d *schema.ResourceData, method string) error {
 	url := d.Get("url").(string)
 	headers := d.Get("request_headers").(map[string]interface{})
 	body := d.Get("body").(string)
-	reader := strings.NewReader(body)
+	bodyStr := []byte(body)
 
 	client := &http.Client{}
-
-	req, err := http.NewRequest(method, url, reader)
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(bodyStr))
 	if err != nil {
 		return err
 	}
 
+	req.Header.Add("Content-Type", "application/json")
 	for name, value := range headers {
 		req.Header.Set(name, value.(string))
 	}
@@ -74,37 +77,24 @@ func buildHTTPClient(d *schema.ResourceData, method string) error {
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("HTTP request error. Response code: %d", resp.StatusCode)
-	}
-
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" || isContentTypeText(contentType) == false {
-		return fmt.Errorf("Content-Type is not recognized as a text type, got %q", contentType)
-	}
-
 	bytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
 
-	responseHeaders := make(map[string]string)
-	for k, v := range resp.Header {
-		// Concatenate according to RFC2616
-		// cf. https://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.2
-		responseHeaders[k] = strings.Join(v, ", ")
+	if (method == http.MethodGet || method == http.MethodDelete) && resp.StatusCode == 404 {
+		d.SetId("")
+		return nil
 	}
 
-	/*
-		d.Set("body", string(bytes))
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		return fmt.Errorf("HTTP request error. Response code: %d. Method: %s. Body: %s", resp.StatusCode, method, string(bytes))
+	}
 
-		// set ID as something more stable than time
-		d.SetId(url)
-	*/
-	if method == "Get" || method == "Post" {
+	if method == http.MethodGet || method == http.MethodPost {
 		id := string(bytes)
 		if id != "" {
-			d.SetId(string(bytes))
+			d.SetId(id)
 		} else {
 			return fmt.Errorf("Get/Post endpoints must return the unique id for the http_resource")
 		}
@@ -114,7 +104,7 @@ func buildHTTPClient(d *schema.ResourceData, method string) error {
 }
 
 func resourceHTTPCreate(d *schema.ResourceData, meta interface{}) error {
-	err := buildHTTPClient(d, "Post")
+	err := buildHTTPClient(d, http.MethodPost)
 	if err != nil {
 		return err
 	}
@@ -123,7 +113,7 @@ func resourceHTTPCreate(d *schema.ResourceData, meta interface{}) error {
 }
 
 func resourceHTTPRead(d *schema.ResourceData, meta interface{}) error {
-	err := buildHTTPClient(d, "Get")
+	err := buildHTTPClient(d, http.MethodGet)
 	if err != nil {
 		return err
 	}
@@ -131,7 +121,7 @@ func resourceHTTPRead(d *schema.ResourceData, meta interface{}) error {
 }
 
 func resourceHTTPDelete(d *schema.ResourceData, meta interface{}) error {
-	err := buildHTTPClient(d, "Delete")
+	err := buildHTTPClient(d, http.MethodDelete)
 	if err != nil {
 		return err
 	}
@@ -141,7 +131,7 @@ func resourceHTTPDelete(d *schema.ResourceData, meta interface{}) error {
 }
 
 func resourceHTTPUpdate(d *schema.ResourceData, meta interface{}) error {
-	err := buildHTTPClient(d, "Put")
+	err := buildHTTPClient(d, http.MethodPut)
 	if err != nil {
 		return err
 	}
